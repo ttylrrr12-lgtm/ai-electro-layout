@@ -19,9 +19,19 @@ def get_db():
     finally:
         db.close()
 
-# создать таблицы, если их нет
-Base.metadata.create_all(bind=engine)
-
+@app.on_event("startup")
+def startup_event():
+    import time
+    attempts, delay = 10, 3
+    for i in range(attempts):
+        try:
+            Base.metadata.create_all(bind=engine)
+            print("[startup] DB ready")
+            break
+        except Exception as e:
+            print(f"[startup] DB init failed: {e}. Retry {i+1}/{attempts} in {delay}s")
+            time.sleep(delay)
+            
 class ProjectIn(BaseModel):
     title: str
     plan: Plan
