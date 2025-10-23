@@ -8,4 +8,4 @@ services:
     startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: DB_DSN
-        value: mysql+pymysql://uncortzm_4:AjWYB9OXm%Dv@uncortzm.beget.tech/uncortzm_4
+        sync: false   # значение зададим в панели Render, не в файле
