@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: ai-electro-backend
+    env: python
+    rootDir: backend
+    plan: free
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: DB_DSN
+        value: mysql+pymysql://uncortzm_4:AjWYB9OXm%Dv@uncortzm.beget.tech/uncortzm_4

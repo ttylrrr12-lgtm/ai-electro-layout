@@ -1,0 +1,5 @@
+# заполните пути под свой датасет
+path: ./data
+train: images/train
+val: images/val
+names: [panel, socket, switch, light, junction]
