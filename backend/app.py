@@ -1,18 +1,91 @@
-# ---------- импорты ----------
+# backend/app.py
 from fastapi import FastAPI, Depends, UploadFile, File, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
+from typing import Any, Dict, List, Optional
+from pydantic import BaseModel, Field
 import time
 from PIL import Image
 import io
 
+# ВАЖНО: используем существующие объекты из database.py
 from database import SessionLocal, engine, Base
 from models import Project, Plan
-from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, Field
-from fastapi import HTTPException
 
-# ===== Pydantic-схемы =====
+# ----------------- СОЗДАЁМ ПРИЛОЖЕНИЕ РАНЬШЕ ВСЕГО -----------------
+app = FastAPI(title="AI Electro Backend", version="0.1.0")
+
+# CORS (позже можно сузить на домен Beget)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ----------------- DEPENDENCY -----------------
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+# ----------------- STARTUP: создаём таблицы с ретраями -----------------
+@app.on_event("startup")
+def startup_event():
+    attempts, delay = 10, 3
+    for i in range(attempts):
+        try:
+            Base.metadata.create_all(bind=engine)
+            print("[startup] DB ready")
+            break
+        except Exception as e:
+            print(f"[startup] DB init failed: {e}. Retry {i+1}/{attempts} in {delay}s")
+            time.sleep(delay)
+
+# ----------------- HEALTH -----------------
+@app.get("/health")
+def health():
+    return {"ok": True}
+
+# ----------------- UPLOAD PLAN -----------------
+@app.post("/upload_plan")
+async def upload_plan(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    allowed = {"image/png", "image/jpeg", "image/svg+xml"}
+    if file.content_type not in allowed:
+        raise HTTPException(status_code=415, detail="Поддерживаются PNG/JPG/SVG")
+
+    content = await file.read()
+
+    width = height = None
+    if file.content_type in {"image/png", "image/jpeg"}:
+        try:
+            im = Image.open(io.BytesIO(content))
+            width, height = im.size
+        except Exception:
+            pass
+
+    plan = Plan(
+        filename=file.filename or "plan",
+        mimetype=file.content_type,
+        width=width,
+        height=height,
+        data=content,
+    )
+    db.add(plan)
+    db.commit()
+    db.refresh(plan)
+    return {"plan_id": plan.id, "width": width, "height": height, "mimetype": plan.mimetype}
+
+@app.get("/plan/{plan_id}/image")
+def get_plan_image(plan_id: int, db: Session = Depends(get_db)):
+    plan = db.get(Plan, plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="План не найден")
+    return Response(content=plan.data, media_type=plan.mimetype)
+
+# ----------------- PROJECTS SCHEMAS -----------------
 class ProjectIn(BaseModel):
     title: str
     plan: Dict[str, Any] = Field(default_factory=dict)
@@ -39,7 +112,7 @@ def project_to_dict(p: Project) -> Dict[str, Any]:
         "updated_at": p.updated_at,
     }
 
-# ===== CRUD =====
+# ----------------- PROJECTS CRUD -----------------
 @app.post("/projects", response_model=ProjectOut)
 def create_project(payload: ProjectIn, db: Session = Depends(get_db)):
     obj = Project(
@@ -63,13 +136,15 @@ def list_projects(db: Session = Depends(get_db)):
 @app.get("/projects/{pid}", response_model=ProjectOut)
 def get_project(pid: int, db: Session = Depends(get_db)):
     p = db.get(Project, pid)
-    if not p: raise HTTPException(404, "Проект не найден")
+    if not p:
+        raise HTTPException(404, "Проект не найден")
     return project_to_dict(p)
 
 @app.put("/projects/{pid}", response_model=ProjectOut)
 def update_project(pid: int, payload: ProjectIn, db: Session = Depends(get_db)):
     p = db.get(Project, pid)
-    if not p: raise HTTPException(404, "Проект не найден")
+    if not p:
+        raise HTTPException(404, "Проект не найден")
     p.title = payload.title
     p.plan = payload.plan
     p.detection = payload.detection
@@ -80,83 +155,12 @@ def update_project(pid: int, payload: ProjectIn, db: Session = Depends(get_db)):
     db.refresh(p)
     return project_to_dict(p)
 
-# ===== простая заглушка «AI-разводки» (пока без логики) =====
+# ----------------- AI ROUTE (заглушка) -----------------
 class RouteIn(BaseModel):
     plan: Dict[str, Any] = Field(default_factory=dict)
     detection: Dict[str, Any] = Field(default_factory=dict)
 
 @app.post("/route")
 def make_route(body: RouteIn):
-    # тут потом подключим правила и прокладку по нормам
+    # позже подставим реальную логику прокладки по правилам
     return {"ok": True, "routes": body.plan.get("routes", {}), "detection": body.detection}
-
-
-# ---------- создаём FastAPI ----------
-app = FastAPI(title="AI Electro Backend", version="0.1.0")
-
-# ---------- CORS ----------
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# ---------- функции ----------
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
-# ---------- стартовое событие ----------
-@app.on_event("startup")
-def startup_event():
-    attempts, delay = 10, 3
-    for i in range(attempts):
-        try:
-            Base.metadata.create_all(bind=engine)
-            print("[startup] DB ready")
-            break
-        except Exception as e:
-            print(f"[startup] DB init failed: {e}. Retry {i+1}/{attempts} in {delay}s")
-            time.sleep(delay)
-
-
-# ---------- эндпоинты ----------
-@app.post("/upload_plan")
-async def upload_plan(file: UploadFile = File(...), db: Session = Depends(get_db)):
-    allowed = {"image/png", "image/jpeg", "image/svg+xml"}
-    if file.content_type not in allowed:
-        raise HTTPException(status_code=415, detail="Поддерживаются PNG/JPG/SVG")
-
-    content = await file.read()
-    width = height = None
-    if file.content_type in {"image/png", "image/jpeg"}:
-        try:
-            im = Image.open(io.BytesIO(content))
-            width, height = im.size
-        except Exception:
-            pass
-
-    plan = Plan(
-        filename=file.filename or "plan",
-        mimetype=file.content_type,
-        width=width,
-        height=height,
-        data=content,
-    )
-    db.add(plan)
-    db.commit()
-    db.refresh(plan)
-    return {"plan_id": plan.id, "width": width, "height": height, "mimetype": plan.mimetype}
-
-
-@app.get("/plan/{plan_id}/image")
-def get_plan_image(plan_id: int, db: Session = Depends(get_db)):
-    plan = db.get(Plan, plan_id)
-    if not plan:
-        raise HTTPException(status_code=404, detail="План не найден")
-    return Response(content=plan.data, media_type=plan.mimetype)
