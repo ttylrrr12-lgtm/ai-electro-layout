@@ -8,6 +8,87 @@ import io
 
 from database import SessionLocal, engine, Base
 from models import Project, Plan
+from typing import Any, Dict, List, Optional
+from pydantic import BaseModel, Field
+from fastapi import HTTPException
+
+# ===== Pydantic-схемы =====
+class ProjectIn(BaseModel):
+    title: str
+    plan: Dict[str, Any] = Field(default_factory=dict)
+    detection: Dict[str, Any] = Field(default_factory=dict)
+    routes: Dict[str, Any] = Field(default_factory=dict)
+    estimate: Dict[str, Any] = Field(default_factory=dict)
+    plan_id: Optional[int] = None
+
+class ProjectOut(ProjectIn):
+    id: int
+    class Config:
+        from_attributes = True  # pydantic v2
+
+def project_to_dict(p: Project) -> Dict[str, Any]:
+    return {
+        "id": p.id,
+        "title": p.title,
+        "plan": p.plan or {},
+        "detection": p.detection or {},
+        "routes": p.routes or {},
+        "estimate": p.estimate or {},
+        "plan_id": p.plan_id,
+        "created_at": p.created_at,
+        "updated_at": p.updated_at,
+    }
+
+# ===== CRUD =====
+@app.post("/projects", response_model=ProjectOut)
+def create_project(payload: ProjectIn, db: Session = Depends(get_db)):
+    obj = Project(
+        title=payload.title,
+        plan=payload.plan,
+        detection=payload.detection,
+        routes=payload.routes,
+        estimate=payload.estimate,
+        plan_id=payload.plan_id,
+    )
+    db.add(obj)
+    db.commit()
+    db.refresh(obj)
+    return project_to_dict(obj)
+
+@app.get("/projects", response_model=List[ProjectOut])
+def list_projects(db: Session = Depends(get_db)):
+    rows = db.query(Project).order_by(Project.id.asc()).all()
+    return [project_to_dict(r) for r in rows]
+
+@app.get("/projects/{pid}", response_model=ProjectOut)
+def get_project(pid: int, db: Session = Depends(get_db)):
+    p = db.get(Project, pid)
+    if not p: raise HTTPException(404, "Проект не найден")
+    return project_to_dict(p)
+
+@app.put("/projects/{pid}", response_model=ProjectOut)
+def update_project(pid: int, payload: ProjectIn, db: Session = Depends(get_db)):
+    p = db.get(Project, pid)
+    if not p: raise HTTPException(404, "Проект не найден")
+    p.title = payload.title
+    p.plan = payload.plan
+    p.detection = payload.detection
+    p.routes = payload.routes
+    p.estimate = payload.estimate
+    p.plan_id = payload.plan_id
+    db.commit()
+    db.refresh(p)
+    return project_to_dict(p)
+
+# ===== простая заглушка «AI-разводки» (пока без логики) =====
+class RouteIn(BaseModel):
+    plan: Dict[str, Any] = Field(default_factory=dict)
+    detection: Dict[str, Any] = Field(default_factory=dict)
+
+@app.post("/route")
+def make_route(body: RouteIn):
+    # тут потом подключим правила и прокладку по нормам
+    return {"ok": True, "routes": body.plan.get("routes", {}), "detection": body.detection}
 
 
 # ---------- создаём FastAPI ----------
