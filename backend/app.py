@@ -7,6 +7,48 @@ import time
 from database import SessionLocal, engine, Base
 from models import Project  # важно: чтобы таблица была известна метаданным
 
+from fastapi import UploadFile, File, HTTPException, Response
+from models import Plan
+from PIL import Image
+import io
+
+@app.post("/upload_plan")
+async def upload_plan(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    # принимаем PNG/JPG/SVG
+    allowed = {"image/png", "image/jpeg", "image/svg+xml"}
+    if file.content_type not in allowed:
+        raise HTTPException(status_code=415, detail="Поддерживаются PNG/JPG/SVG")
+
+    content = await file.read()
+
+    width = height = None
+    if file.content_type in {"image/png", "image/jpeg"}:
+        # определим размеры
+        try:
+            im = Image.open(io.BytesIO(content))
+            width, height = im.size
+        except Exception:
+            pass
+
+    plan = Plan(
+        filename=file.filename or "plan",
+        mimetype=file.content_type,
+        width=width,
+        height=height,
+        data=content,
+    )
+    db.add(plan)
+    db.commit()
+    db.refresh(plan)
+    return {"plan_id": plan.id, "width": width, "height": height, "mimetype": plan.mimetype}
+
+@app.get("/plan/{plan_id}/image")
+def get_plan_image(plan_id: int, db: Session = Depends(get_db)):
+    plan = db.get(Plan, plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="План не найден")
+    return Response(content=plan.data, media_type=plan.mimetype)
+
 def get_db():
     db = SessionLocal()
     try:
